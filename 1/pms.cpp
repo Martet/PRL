@@ -1,3 +1,7 @@
+// Implementation of pipeline merge sort, PRL project 1
+// Author: Martin Zmitko (xzmitk01@stud.fit.vutbr.cz)
+// Date: 2024-04-03
+
 #include "mpi.h"
 #include <iostream>
 #include <iterator>
