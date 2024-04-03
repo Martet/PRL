@@ -18,7 +18,7 @@ mpic++ --prefix /usr/local/share/OpenMPI -o pms pms.cpp
 dd if=/dev/random bs=1 count=$numbers of=numbers 2> /dev/null	 
 
 #spusteni programu
-mpirun --prefix /usr/local/share/OpenMPI  -np $proc pms 				
+mpirun --prefix /usr/local/share/OpenMPI  -np $proc --oversubscribe pms 				
 
 #uklid
 rm -f pms numbers

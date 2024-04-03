@@ -23,8 +23,10 @@ int main(int argc, char *argv[]){
             std::cerr << "Process 0: No numbers in file, aborting" << std::endl;
             MPI::COMM_WORLD.Abort(1);
         }
-        if(size < std::log2(numbers.size())){
-            std::cerr << "Process 0: Not enough processes to sort numbers, aborting" << std::endl;
+        size_t numbers_size = numbers.size();
+        size_t required_size = std::ceil(std::log2(numbers_size) + 1);
+        if(size < required_size){
+            std::cerr << "Process 0: Not enough processes to sort numbers (" << required_size << " required for " << numbers_size << " numbers), aborting" << std::endl;
             MPI::COMM_WORLD.Abort(1);
         }
 
@@ -34,7 +36,6 @@ int main(int argc, char *argv[]){
             std::cout << " " << (int)numbers[i];
         }
         std::cout << std::endl;
-        MPI::COMM_WORLD.Barrier();
 
         // Send out numbers to process 1
         int queue = QUEUE_A;
@@ -42,14 +43,14 @@ int main(int argc, char *argv[]){
             MPI::COMM_WORLD.Send(&number, 1, MPI::UNSIGNED_CHAR, 1, queue);
             queue = queue == QUEUE_A ? QUEUE_B : QUEUE_A;
         }
+        // Always send empty message to signal end of numbers
         MPI::COMM_WORLD.Send(nullptr, 0, MPI::UNSIGNED_CHAR, 1, queue);
     }
     else { // Processes 1 to size - 1
-        MPI::COMM_WORLD.Barrier();
         std::queue<unsigned char> queue_A, queue_B;
         int sending_queue = QUEUE_A;
-        const int sending_limit = std::pow(2, rank - 1);
-        const int receiving_limit = std::ceil(std::pow(2, rank - 2));
+        const int receiving_limit = std::pow(2, rank - 1);
+        const int sending_limit = std::pow(2, rank);
         int sent = 0;
         int read_A = 0, read_B = 0;
         bool receiving = true;
@@ -64,22 +65,20 @@ int main(int argc, char *argv[]){
                 if(received){
                     auto *queue = status.Get_tag() == QUEUE_A ? &queue_A : &queue_B;
                     queue->push(number);
-                    //printf("Process %d received %d in queue %s", rank, (int)number, status.Get_tag() == QUEUE_A ? "A\n" : "B\n");
                 }
                 else{
                     receiving = false;
-                    //printf("Process %d stopped receiving\n", rank);
+                    sending = true; // If not enough numbers arrived, send anyway
                 }
             }
             // Set sending flag if limit of 2^(i-1) and 1 items in queues is reached
-            if(!sending && queue_A.size() >= sending_limit && queue_B.size() > 0){
+            if(!sending && queue_A.size() >= receiving_limit && queue_B.size() > 0){
                 sending = true;
             }
 
             // Send numbers to next process
             if(sending){
-                //printf("Process %d A=%d B=%d ", rank, queue_A.front(), queue_B.front());
-                int number = 256;
+                int number = 256; // Larger than any number, can't show in output
                 if(!queue_A.empty() && read_A < receiving_limit){
                     number = queue_A.front();
                 }
@@ -88,7 +87,7 @@ int main(int argc, char *argv[]){
                     queue_B.pop();
                     read_B++;
                 }
-                else if((queue_A.empty() || read_A < receiving_limit) && read_B < receiving_limit){
+                else if((queue_A.empty() || read_A >= receiving_limit) && read_B < receiving_limit && !queue_B.empty()){
                     number = queue_B.front();
                     queue_B.pop();
                     read_B++;
@@ -97,24 +96,25 @@ int main(int argc, char *argv[]){
                     queue_A.pop();
                     read_A++;
                 }
+
+                // Reset read counters if sequence is complete
                 if(read_A >= receiving_limit && read_B >= receiving_limit){
                     read_A = 0;
                     read_B = 0;
                 }
-                //printf("picked %d\n", number);
+
                 if(rank == size - 1){
                     std::cout << (int)number << std::endl;
                 }
                 else{
                     MPI::COMM_WORLD.Send(&number, 1, MPI::UNSIGNED_CHAR, rank + 1, sending_queue);
-                    //printf("Process %d sent %d\n", rank, (int)number);
                 }
 
+                sent++;
                 if(sent >= sending_limit){
                    sending_queue = sending_queue == QUEUE_A ? QUEUE_B : QUEUE_A;
                    sent = 0;
                 }
-                sent++;
             }
 
             // Quit if no more numbers to receive and no more numbers to send
@@ -122,12 +122,10 @@ int main(int argc, char *argv[]){
                 if(rank != size - 1){
                     MPI::COMM_WORLD.Send(nullptr, 0, MPI::UNSIGNED_CHAR, rank + 1, sending_queue);
                 }
-                //printf("Process %d stopped sending\n", rank);
                 break;
             }
         }
     }
-
 
     MPI::Finalize();
     return 0;
