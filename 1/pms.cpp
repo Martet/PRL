@@ -1,6 +1,9 @@
 // Implementation of pipeline merge sort, PRL project 1
 // Author: Martin Zmitko (xzmitk01@stud.fit.vutbr.cz)
-// Date: 2024-04-03
+// Date: 2024-04-08
+//
+// Supports sorting sequences of arbitrary length for any number of processes
+// (as long as there are enough processes to handle the sequence size)
 
 #include "mpi.h"
 #include <iostream>
@@ -72,7 +75,7 @@ int main(int argc, char *argv[]){
                 }
                 else{
                     receiving = false;
-                    sending = true; // If not enough numbers arrived, send anyway
+                    sending = true; // If not enough numbers arrived, send anyway to allow arbitrary number count
                 }
             }
             // Set sending flag if limit of 2^(i-1) and 1 items in queues is reached
