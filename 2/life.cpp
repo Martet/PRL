@@ -2,25 +2,30 @@
 // Author: Martin Zmitko (xzmitk01@stud.fit.vutbr.cz)
 // Date: 2024-04-26
 //
+// An arbitrary number of processes (must be more than 1 and less than number of rows)
+// is suported, as long as the number of rows is divisible by the number of processes.
 // The field is split into chunks of rows for each process. In each iteration,
-// the processes exchange the border rows and update their chunk of the field.
-// An arbitrary number of processes is suported, as long as the number of rows
-// is divisible by the number of processes. Each processor then computes
-// numRows / numProcesses rows of the field.
-// The grid is implemented as infinite, so the field wraps around the edges.
+// the processes exchange their border rows and update their chunk of the field.
+// Each processor computes numRows / numProcesses rows of the field.
+// The grid is implemented as infinite, so the field wraps around the edges,
+// only square grids are supported.
 
 #include <iostream>
 #include <fstream>
 #include <vector>
 #include "mpi.h"
 
+typedef std::vector<int> row_t;
+typedef std::vector<row_t> grid_t;
+
 // Update the grid according to the rules of Conway's Game of Life
 // takes a chunk of the grid including the two neightbouring rows and returns the updated chunk
 // (wihtout the neightbouring rows)
-std::vector<std::vector<int>> updateGrid(std::vector<std::vector<int>> grid) {
-    int gridSize = grid[0].size();
-    std::vector<std::vector<int>> newGrid(gridSize, std::vector<int>(gridSize, 0));
-    for (int i = 1; i < grid.size() - 1; i++) {
+grid_t updateGrid(grid_t grid) {
+    const int gridSize = grid[0].size();
+    const int chunkSize = grid.size() - 2;
+    grid_t newGrid(chunkSize, row_t(gridSize, 0));
+    for (int i = 1; i < chunkSize + 1; i++) {
         for (int j = 0; j < gridSize; j++) {
             int count = 0;
             for (int x = -1; x <= 1; x++) {
@@ -29,7 +34,7 @@ std::vector<std::vector<int>> updateGrid(std::vector<std::vector<int>> grid) {
                         continue;
                     }
                     // wrap around the grid, rows always available, columns wrap around
-                    int _j = j + y < 0 ? gridSize - 1 : (j + y) % gridSize;
+                    const int _j = j + y < 0 ? gridSize - 1 : (j + y) % gridSize;
                     count += grid[i + x][_j];
                 }
             }
@@ -45,8 +50,8 @@ std::vector<std::vector<int>> updateGrid(std::vector<std::vector<int>> grid) {
 
 int main(int argc, char* argv[]) {
     MPI::Init();
-    int rank = MPI::COMM_WORLD.Get_rank();
-    int size = MPI::COMM_WORLD.Get_size();
+    const int rank = MPI::COMM_WORLD.Get_rank();
+    const int size = MPI::COMM_WORLD.Get_size();
     int chunkSize, gridSize;
 
     if (argc < 3) {
@@ -66,7 +71,7 @@ int main(int argc, char* argv[]) {
     }
 
     // The local grid of each process
-    std::vector<std::vector<int>> processGrid;
+    grid_t processGrid;
     
     // Process 0 reads the input file and distributes the grid to other processes
     if (rank == 0) {
@@ -76,10 +81,10 @@ int main(int argc, char* argv[]) {
             MPI::COMM_WORLD.Abort(1);
         }
 
-        std::vector<std::vector<int>> grid;
+        grid_t grid;
         std::string line;
         while (std::getline(file, line)) {
-            std::vector<int> row;
+            row_t row;
             for (char c : line) {
                 row.push_back(c - '0');
             }
@@ -87,14 +92,20 @@ int main(int argc, char* argv[]) {
         }
         file.close();
 
-        if (grid.size() == 0 || grid[0].size() == 0) {
+        gridSize = grid.size();
+        chunkSize = gridSize / size;
+        if (gridSize == 0) {
             std::cerr << "Empty grid." << std::endl;
             MPI::COMM_WORLD.Abort(1);
         }
+        for (int i = 0; i < gridSize; i++) {
+            if (grid[i].size() != gridSize) {
+                std::cerr << "The grid must be square." << std::endl;
+                MPI::COMM_WORLD.Abort(1);
+            }
+        }
 
         // Initialize the local grid of process 0
-        gridSize = grid.size();
-        chunkSize = gridSize / size;
         for (int i = 0; i < chunkSize; i++) {
             processGrid.push_back(grid[i]);
         }
@@ -119,7 +130,7 @@ int main(int argc, char* argv[]) {
         int *row = new int[gridSize];
         for (int i = 0; i < chunkSize; i++) {
             MPI::COMM_WORLD.Recv(row, gridSize, MPI::INT, 0, 0);
-            processGrid.push_back(std::vector<int>(row, row + gridSize));
+            processGrid.push_back(row_t(row, row + gridSize));
         }
         delete[] row;
     }
@@ -128,14 +139,14 @@ int main(int argc, char* argv[]) {
     int *row = new int[gridSize];
     for (int i = 0; i < numSteps; i++) {
         // Send the border rows to the neighbouring processes
-        MPI::COMM_WORLD.Send(processGrid[0].data(), gridSize, MPI::INT, rank == 0 ? size - 1 : rank - 1, 0);
         MPI::COMM_WORLD.Send(processGrid[chunkSize - 1].data(), gridSize, MPI::INT, (rank + 1) % size, 0);
+        MPI::COMM_WORLD.Send(processGrid[0].data(), gridSize, MPI::INT, rank == 0 ? size - 1 : rank - 1, 0);
 
         // Receive the border rows from the neighbouring processes
         MPI::COMM_WORLD.Recv(row, gridSize, MPI::INT, rank == 0 ? size - 1 : rank - 1, 0);
-        processGrid.insert(processGrid.begin(), std::vector<int>(row, row + gridSize));
+        processGrid.insert(processGrid.begin(), row_t(row, row + gridSize));
         MPI::COMM_WORLD.Recv(row, gridSize, MPI::INT, (rank + 1) % size, 0);
-        processGrid.push_back(std::vector<int>(row, row + gridSize));
+        processGrid.push_back(row_t(row, row + gridSize));
         
         // Update the grid
         processGrid = updateGrid(processGrid);
@@ -143,6 +154,10 @@ int main(int argc, char* argv[]) {
     delete[] row;
 
     // Print the final state of the grid
+    // Barriers are used to ensure that the output is printed in the correct order,
+    // however, the outputs of different processes may be interleaved as this is
+    // a limitation of multiple processes writing to the same output stream with
+    // no option to force a buffer flush.
     for (int i = 0; i < rank; i++) {
         MPI::COMM_WORLD.Barrier();
     }
